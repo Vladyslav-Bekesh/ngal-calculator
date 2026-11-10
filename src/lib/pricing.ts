@@ -34,9 +34,46 @@ export type InscriptionItem = {
   presetId: PresetPhraseId | "";
 };
 
+/** Апостроф у написах (пам'ять) — як мала літера; інші розділові знаки — ні. */
+const TEXT_APOSTROPHE_RE =
+  /['\u2019\u02BC\u02B9\u0060\u00B4\u2032\uFF07]/u;
+
+export type TextBillableKind = "lower" | "upper";
+
+export function isTextApostrophe(char: string): boolean {
+  return TEXT_APOSTROPHE_RE.test(char);
+}
+
+export function getTextBillableUnits(text: string): TextBillableKind[] {
+  const units: TextBillableKind[] = [];
+  for (const char of text) {
+    if (/\p{Lu}/u.test(char)) {
+      units.push("upper");
+    } else if (/\p{Ll}/u.test(char)) {
+      units.push("lower");
+    } else if (isTextApostrophe(char)) {
+      units.push("lower");
+    }
+  }
+  return units;
+}
+
+export function getTextLetters(text: string): string[] {
+  return [...text.matchAll(/[\p{Lu}\p{Ll}]/gu)].map((m) => m[0]);
+}
+
 export function countLetters(text: string): number {
-  const matches = text.match(/\p{L}/gu);
-  return matches?.length ?? 0;
+  return getTextBillableUnits(text).length;
+}
+
+export function getHeightTierIndex(id: HeightTierId): number {
+  const i = HEIGHT_TIERS.findIndex((t) => t.id === id);
+  return i >= 0 ? i : 2;
+}
+
+export function getHeightTierByIndex(index: number) {
+  const i = Math.min(Math.max(index, 0), HEIGHT_TIERS.length - 1);
+  return HEIGHT_TIERS[i];
 }
 
 export function countDateDigits(text: string): number {
@@ -81,18 +118,48 @@ export function calculateLine(item: InscriptionItem): LineBreakdown {
     };
   }
 
-  const letters = countLetters(item.text);
-  const tier = getHeightTier(item.heightTierId);
-  const amount = letters * tier.pricePerLetter;
+  const units = getTextBillableUnits(item.text);
+  const baseIndex = getHeightTierIndex(item.heightTierId);
+  const baseTier = getHeightTier(item.heightTierId);
+  const capTier = getHeightTierByIndex(baseIndex + 1);
+
+  let lowerCount = 0;
+  let upperCount = 0;
+  let amount = 0;
+
+  for (const kind of units) {
+    if (kind === "upper") {
+      upperCount += 1;
+      amount += capTier.pricePerLetter;
+    } else {
+      lowerCount += 1;
+      amount += baseTier.pricePerLetter;
+    }
+  }
+
   const preview =
     item.text.trim().slice(0, 40) + (item.text.trim().length > 40 ? "…" : "");
+  const totalLetters = lowerCount + upperCount;
+
+  let detail = "Введіть текст";
+  if (totalLetters > 0) {
+    const parts: string[] = [];
+    if (lowerCount > 0) {
+      parts.push(
+        `${lowerCount} мал. × ${baseTier.pricePerLetter} грн (${baseTier.label})`,
+      );
+    }
+    if (upperCount > 0) {
+      parts.push(
+        `${upperCount} вел. × ${capTier.pricePerLetter} грн (${capTier.label})`,
+      );
+    }
+    detail = `«${preview || "…"}»: ${parts.join("; ")}`;
+  }
 
   return {
     label: item.text.trim() || "Текст",
-    detail:
-      letters > 0
-        ? `«${preview || "…"}»: ${letters} букв × ${tier.pricePerLetter} грн (${tier.label})`
-        : "Введіть текст",
+    detail,
     amount,
   };
 }
